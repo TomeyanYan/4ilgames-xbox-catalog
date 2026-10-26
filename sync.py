@@ -48,7 +48,7 @@ def convert(value, rate):
     def replace(match):
         rub = Decimal(match.group(1).replace(" ", "").replace("\u00a0", ""))
         byn = (rub * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        return f"{byn:.2f} BYN".replace(".", ",")
+        return f"{match.group(0).strip()} / {byn:.2f} BYN".replace(f"{byn:.2f}", f"{byn:.2f}".replace(".", ","))
     return PRICE.sub(replace, value)
 
 
