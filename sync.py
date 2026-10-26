@@ -1,108 +1,118 @@
-"""Build a searchable Xbox catalog on GitHub Pages from a public Telegraph source."""
 import html
-import json
 import re
-from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-
 import requests
 from bs4 import BeautifulSoup
 
 SOURCE = "https://telegra.ph/Spisok-igr-1-12-14-3"
-OUTPUT = Path("site")
 PRICE = re.compile(r"(?<!\d)(\d[\d\s\u00a0]{0,9})\s*(?:₽|руб(?:\.|лей|ля)?|RUB)", re.I)
-HTTP = requests.Session()
-HTTP.headers.update({"User-Agent": "Mozilla/5.0 (compatible; 4ILGAMES-Catalog/2.0)"})
+FEATURED = [
+    ("Cyberpunk 2077", "cyberpunk 2077", 1091500),
+    ("Red Dead Redemption 2", "red dead redemption 2", 1174180),
+    ("Elden Ring", "elden ring", 1245620),
+    ("Hogwarts Legacy", "hogwarts legacy", 990080),
+    ("Forza Horizon 5", "forza horizon 5", 1551360),
+    ("The Witcher 3", "witcher 3", 292030),
+]
 
-
-def get_source():
-    response = HTTP.get(SOURCE, timeout=40)
+def main():
+    response = requests.get(SOURCE, timeout=40, headers={"User-Agent": "Mozilla/5.0"})
     response.raise_for_status()
     article = BeautifulSoup(response.text, "html.parser").select_one("article")
-    if article is None:
-        raise RuntimeError("Не найден список игр в исходной статье")
+    if not article:
+        raise RuntimeError("Source article not found")
     lines = []
     for el in article.find_all(["p", "h3", "h4", "li"]):
-        if el.find_parent(["p", "h3", "h4", "li"]):
-            continue
-        value = el.get_text(" ", strip=True)
-        if value:
-            lines.append(value)
+        if not el.find_parent(["p", "h3", "h4", "li"]):
+            line = el.get_text(" ", strip=True)
+            if line:
+                lines.append(line)
     if len(lines) < 50:
-        raise RuntimeError(f"Слишком мало строк: {len(lines)}")
-    return lines
+        raise RuntimeError("Source list is unexpectedly short")
 
-
-def get_rate():
-    response = HTTP.get("https://api.nbrb.by/exrates/rates/RUB?parammode=2", timeout=25)
-    response.raise_for_status()
-    data = response.json()
-    rate = Decimal(str(data["Cur_OfficialRate"])) / Decimal(str(data["Cur_Scale"]))
+    data = requests.get("https://api.nbrb.by/exrates/rates/RUB?parammode=2", timeout=25)
+    data.raise_for_status()
+    rate_data = data.json()
+    rate = Decimal(str(rate_data["Cur_OfficialRate"])) / Decimal(str(rate_data["Cur_Scale"]))
     if not Decimal("0.001") < rate < Decimal("1"):
-        raise RuntimeError("Неожиданный курс RUB/BYN")
-    return rate, data["Date"][:10]
+        raise RuntimeError("Invalid RUB/BYN rate")
 
+    def convert(line):
+        def repl(match):
+            rub = Decimal(match.group(1).replace(" ", "").replace("\u00a0", ""))
+            byn = (rub * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            return match.group(0).strip() + " / " + format(byn, ".2f").replace(".", ",") + " BYN"
+        return PRICE.sub(repl, line)
 
-def convert(value, rate):
-    def replace(match):
-        rub = Decimal(match.group(1).replace(" ", "").replace("\u00a0", ""))
-        byn = (rub * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        return f"{match.group(0).strip()} / {byn:.2f} BYN".replace(f"{byn:.2f}", f"{byn:.2f}".replace(".", ","))
-    return PRICE.sub(replace, value)
-
-
-def build():
-    lines = get_source()
-    rate, rate_date = get_rate()
-    converted = [convert(line, rate) for line in lines]
-    converted_count = sum(a != b for a, b in zip(lines, converted))
-    if converted_count < 30:
-        raise RuntimeError(f"Распознано слишком мало цен: {converted_count}")
-    # Source includes informational paragraphs as well as game titles.
-    now = datetime.now(timezone(timedelta(hours=3))).strftime("%d.%m.%Y в %H:%M")
+    converted = [convert(line) for line in lines]
+    changed = sum(a != b for a, b in zip(lines, converted))
+    if changed < 30:
+        raise RuntimeError("Too few converted prices")
     entries = "\n".join(
-        f'<div class="item" data-search="{html.escape(line.casefold(), quote=True)}">{html.escape(line)}</div>'
-        for line in converted
+        '<div class="item" data-search="' + html.escape(line.casefold(), quote=True) + '">' +
+        html.escape(line) + '</div>' for line in converted
     )
-    page = '''<!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#10131a"><meta name="description" content="4ILGAMES — каталог игр Xbox с ценами в белорусских рублях">
-<title>Каталог игр Xbox — 4ILGAMES</title>
+    cards = []
+    for title, needle, appid in FEATURED:
+        match = next((new for old, new in zip(lines, converted)
+                      if needle in old.casefold() and PRICE.search(old)
+                      and not any(x in old.casefold() for x in ("dlc", "upgrade", "soundtrack"))), None)
+        if match:
+            cards.append(
+                '<article class="feature"><img loading="lazy" alt="' + html.escape(title, quote=True) +
+                '" src="https://cdn.akamai.steamstatic.com/steam/apps/' + str(appid) + '/header.jpg">' +
+                '<div class="feature-body"><strong>' + html.escape(title) + '</strong><p>' +
+                html.escape(match) + '</p><button data-find="' + html.escape(needle, quote=True) +
+                '">Найти в каталоге</button></div></article>'
+            )
+        if len(cards) == 4:
+            break
+    template = '''<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Каталог Xbox — 4ILGAMES</title>
 <style>
-:root{color-scheme:dark;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}*{box-sizing:border-box}
-body{margin:0;background:#0d1017;color:#eaf0f8}main{max-width:980px;margin:auto;padding:26px 16px 64px}
-header{background:linear-gradient(125deg,#102b20,#101622 75%);border:1px solid #2c5943;border-radius:20px;padding:25px;margin-bottom:20px}
-h1{margin:0 0 8px;font-size:clamp(28px,5vw,43px)}h1 span{color:#4ce19a}.subtitle{color:#c1d4c9;margin:0 0 16px}
-.meta{color:#b5c2d3;font-size:14px;line-height:1.7}.search{position:sticky;top:0;background:#0d1017;padding:12px 0;z-index:2}
-input{width:100%;border:1px solid #405264;border-radius:12px;padding:16px;background:#1b2430;color:white;font-size:17px;outline:none}
-input:focus{border-color:#4ce19a}#count{color:#a9b6c7;font-size:14px;margin:8px 3px 15px}
+:root{color-scheme:dark;font-family:system-ui,Arial,sans-serif}*{box-sizing:border-box}
+body{margin:0;background:#0d1017;color:#eaf0f8}main{max-width:1050px;margin:auto;padding:25px 16px 65px}
+header{background:linear-gradient(120deg,#102d21,#121724);border:1px solid #30543f;border-radius:18px;padding:28px;margin-bottom:26px}
+h1{font-size:clamp(28px,5vw,43px);margin:0 0 10px}h1 span{color:#4ce19a}
+header p{color:#c6d8cf;line-height:1.6;margin:0}h2{font-size:23px}
+.features{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin-bottom:25px}
+.feature{background:#171d28;border:1px solid #2b3947;border-radius:14px;overflow:hidden}
+.feature img{display:block;width:100%;aspect-ratio:460/215;object-fit:cover;background:#273445}
+.feature-body{padding:13px}.feature-body strong{font-size:16px}
+.feature-body p{color:#bfcddb;font-size:13px;line-height:1.5;min-height:45px}
+button{border:1px solid #3c9a63;border-radius:9px;padding:10px 12px;background:#245c3d;color:white;cursor:pointer}
+.search{position:sticky;top:0;background:#0d1017;padding:12px 0;z-index:2}
+input{width:100%;border:1px solid #405264;border-radius:12px;padding:16px;background:#1b2430;color:white;font-size:17px}
+#count{color:#a9b6c7;font-size:14px;margin:9px 2px 15px}
 .item{background:#171d28;border:1px solid #293242;border-radius:10px;padding:13px 15px;margin:8px 0;line-height:1.5;overflow-wrap:anywhere}
-.item:hover{border-color:#3c775b}.item[hidden]{display:none}footer{color:#8795a8;font-size:13px;margin-top:26px}
-a{color:#6fe5ab}
-</style></head><body><main><header><h1><span>4ILGAMES</span> · Xbox</h1>
-<p class="subtitle">Каталог игр и дополнений · цены в BYN без наценки</p>
-<div class="meta">Курс НБРБ: 1 RUB = __RATE__ BYN · дата курса: __RATE_DATE__<br>
-Обновлено: __UPDATED__ (Минск)<br>Наличие и итоговую стоимость уточняйте перед покупкой.</div></header>
+.item[hidden]{display:none}footer{color:#91a0b0;font-size:13px;margin-top:25px}a{color:#6fe5ab}
+</style></head><body><main>
+<header><h1><span>4ILGAMES</span> · Xbox</h1>
+<p>Во что играем сегодня? 💚<br>Собрали игры для Xbox в одном месте, чтобы ты не тратил время на поиски.<br>Не нашёл нужную? Напиши — попробуем найти.<br>Цены в ₽ и BYN.</p></header>
+<section id="featured"><h2>🔥 Популярные игры</h2><div class="features">__CARDS__</div></section>
 <div class="search"><input id="q" type="search" placeholder="🔎 Найти игру по названию..." aria-label="Поиск игр"></div>
-<div id="count" role="status"></div><section id="catalog">__ENTRIES__</section>
-<footer>Источник: <a href="__SOURCE__" rel="noopener noreferrer">публичный список игр</a>. Конвертация по официальному курсу НБРБ.</footer></main>
-<script>
-const input=document.getElementById('q'), items=[...document.querySelectorAll('.item')], count=document.getElementById('count');
+<div id="count"></div><section id="catalog">__ENTRIES__</section>
+<footer>Цены в BYN рассчитаны по официальному курсу НБРБ без наценки. Оригинальные цены в ₽ сохранены.
+Источник: <a href="__SOURCE__">список игр</a>. Наличие уточняйте перед покупкой.</footer>
+</main><script>
+const input=document.getElementById('q'),items=[...document.querySelectorAll('.item')],count=document.getElementById('count');
 function update(){const term=input.value.trim().toLocaleLowerCase('ru');let shown=0;
 for(const el of items){const visible=el.dataset.search.includes(term);el.hidden=!visible;if(visible)shown++}
 count.textContent=`Найдено строк: ${shown} из ${items.length}`}
-input.addEventListener('input',update);update();
+input.addEventListener('input',update);
+document.querySelectorAll('[data-find]').forEach(b=>b.addEventListener('click',()=>{
+input.value=b.dataset.find;update();input.scrollIntoView({behavior:'smooth',block:'center'});input.focus()}));
+if(!document.querySelector('.feature'))document.getElementById('featured').hidden=true;
+update();
 </script></body></html>'''
-    page = (page.replace("__RATE__", str(rate))
-                .replace("__RATE_DATE__", html.escape(rate_date))
-                .replace("__UPDATED__", html.escape(now))
-                .replace("__ENTRIES__", entries)
-                .replace("__SOURCE__", html.escape(SOURCE, quote=True)))
-    OUTPUT.mkdir(parents=True, exist_ok=True)
-    (OUTPUT / "index.html").write_text(page, encoding="utf-8")
-    (OUTPUT / ".nojekyll").touch()
-    print(f"Generated site/index.html: {len(lines)} lines, {converted_count} converted, rate {rate}, date {rate_date}")
+    page = template.replace("__CARDS__", "\n".join(cards)).replace("__ENTRIES__", entries).replace("__SOURCE__", html.escape(SOURCE, quote=True))
+    output = Path("site")
+    output.mkdir(exist_ok=True)
+    (output / "index.html").write_text(page, encoding="utf-8")
+    (output / ".nojekyll").touch()
+    print(f"Generated {len(lines)} entries, {changed} converted, {len(cards)} featured cards")
 
 if __name__ == "__main__":
-    build()
+    main()
