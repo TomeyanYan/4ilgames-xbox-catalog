@@ -100,7 +100,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     (output/'index.html').write_text(page, encoding='utf-8')
     (output/'.nojekyll').touch()
-    print(f'Built {len(products)} products, {len(featured)} affordable carousel offers; rate {rate}')
+    print(f'Built {len(products)} products, {len(featured)} carousel game recommendations; rate {rate}')
 
 TEMPLATE = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#0d1017"><meta name="description" content="Каталог Xbox 4ILGAMES — игры, выгодные предложения и цены в RUB и BYN">
@@ -130,7 +130,7 @@ footer{color:#8d9fb0;font-size:13px;line-height:1.6;margin-top:32px}
 <header><div class="logo">4ILGAMES · Xbox</div><h1>Во что играем сегодня? 💚</h1>
 <p>Собрали игры для Xbox в одном месте, чтобы ты не тратил время на поиски.<br>Не нашёл нужную? Напиши — попробуем найти.<br>Цены в ₽ и BYN.</p>
 <a class="btn primary" href="__TELEGRAM__" target="_blank" rel="noopener noreferrer">💬 Написать в Telegram ↗</a></header>
-<section id="new-section" hidden><div class="head"><h2>🔥 Выгодные предложения</h2><div class="arrows"><button id="prev" aria-label="Назад">‹</button><button id="next" aria-label="Вперёд">›</button></div></div><div id="slider" class="slider"></div></section>
+<section id="new-section" hidden><div class="head"><h2>🎮 Во что поиграть?</h2><div class="arrows"><button id="prev" aria-label="Назад">‹</button><button id="next" aria-label="Вперёд">›</button></div></div><div id="slider" class="slider"></div></section>
 <section id="offers-section" hidden><h2>🏷️ Скидки недели</h2><div id="offers"></div><p class="notice">Показываются только предложения, явно отмеченные как акции или скидки в исходном списке. Актуальность уточняйте.</p></section>
 <section class="toolbar" aria-label="Поиск и фильтры"><div class="controls">
 <input id="search" type="search" placeholder="🔎 Найти игру..." aria-label="Поиск по каталогу">
@@ -167,7 +167,7 @@ document.addEventListener('click',event=>{const button=event.target.closest('but
 if(button.dataset.buy!==undefined){const p=byId.get(Number(button.dataset.buy));if(p)order([p]);}
 if(button.dataset.fav!==undefined){const id=Number(button.dataset.fav);if(fav.has(id))fav.delete(id);else fav.add(id);try{localStorage.setItem('4ilgames-favs',JSON.stringify([...fav]))}catch{notify('Не удалось сохранить избранное в браузере')}render();}
 if(button.dataset.find!==undefined){$('search').value=button.dataset.find;tab='all';render();$('search').scrollIntoView({behavior:'smooth',block:'center'});}});
-if(data.featured.length){$('new-section').hidden=false;$('slider').innerHTML=data.featured.map(f=>{const p=byId.get(f.productId);return `<article class="slide">${f.image?`<img loading="lazy" src="${escape(f.image)}" alt="Обложка ${escape(f.title)}">`:`<div class="slide-placeholder">🎮<small>4ILGAMES</small></div>`}<div class="slide-body"><h3>${escape(f.title)}</h3><p>${escape(money(p))}</p><button class="primary" data-buy="${p.id}">Купить ↗</button> <button data-find="${escape(f.title)}">Найти</button></div></article>`}).join('');}
+if(data.featured.length){$('new-section').hidden=false;$('slider').innerHTML=data.featured.map(f=>{const p=byId.get(f.productId);return `<article class="slide">${f.image?`<img loading="lazy" src="${escape(f.image)}" alt="Обложка ${escape(f.title)}">`:`<div class="slide-placeholder">🎮<small>4ILGAMES</small></div>`}<div class="slide-body"><h3>${escape(f.title)}</h3></div></article>`}).join('');}
 for(const [id,direction] of [['prev',-1],['next',1]])$(id).addEventListener('click',()=>$('slider').scrollBy({left:direction*325,behavior:'smooth'}));
 if(data.offers.length){$('offers-section').hidden=false;$('offers').innerHTML=data.offers.map(id=>card(byId.get(id))).join('');}
 render();
