@@ -8,11 +8,48 @@ import requests
 from bs4 import BeautifulSoup
 
 SOURCE = 'https://telegra.ph/Spisok-igr-1-12-14-3'
-PRICE = re.compile(r'(?<!\d)(\d[\d\s\u00a0]{0,9})\s*(?:₽|руб(?:\.|лей|ля)?|RUB)', re.I)
+# The page itself (HTML) can come back as an old cached copy; the Telegraph API returns the current version.
+API = 'https://api.telegra.ph/getPage/' + SOURCE.rsplit('/', 1)[-1] + '?return_content=true'
+BLOCKS = {'p', 'h3', 'h4', 'li', 'blockquote', 'pre', 'aside'}
 
 
-def main():
-    response = requests.get(SOURCE, timeout=40, headers={'User-Agent': 'Mozilla/5.0'})
+def node_text(node):
+    if isinstance(node, str):
+        return node
+    if node.get('tag') == 'br':
+        return ' '
+    return ''.join(node_text(child) for child in node.get('children', []))
+
+
+def api_lines():
+    """Text lines of the page from the Telegraph API: one per top-level block, list items one each."""
+    response = requests.get(API, timeout=40, headers={'User-Agent': 'Mozilla/5.0', 'Cache-Control': 'no-cache'})
+    response.raise_for_status()
+    data = response.json()
+    if not data.get('ok'):
+        raise RuntimeError('Telegraph API: ' + str(data.get('error')))
+    lines = []
+
+    def walk(nodes):
+        for node in nodes:
+            if isinstance(node, str):
+                continue
+            tag = node.get('tag')
+            if tag in ('ul', 'ol'):
+                walk(node.get('children', []))
+            elif tag in BLOCKS:
+                line = ' '.join(node_text(node).split())
+                if line:
+                    lines.append(line)
+
+    walk(data['result'].get('content', []))
+    return lines
+
+
+def html_lines():
+    """Fallback: the page HTML, with a cache-busting query."""
+    import time
+    response = requests.get(SOURCE + '?t=' + str(int(time.time())), timeout=40, headers={'User-Agent': 'Mozilla/5.0', 'Cache-Control': 'no-cache'})
     response.raise_for_status()
     article = BeautifulSoup(response.text, 'html.parser').select_one('article')
     if article is None:
@@ -23,6 +60,20 @@ def main():
             line = el.get_text(' ', strip=True)
             if line:
                 lines.append(line)
+    return lines
+
+
+PRICE = re.compile(r'(?<!\d)(\d[\d\s\u00a0]{0,9})\s*(?:₽|руб(?:\.|лей|ля)?|RUB)', re.I)
+
+
+def main():
+    try:
+        lines = api_lines()
+        print('Source: Telegraph API')
+    except Exception as error:  # noqa: BLE001 — any API trouble falls back to the page
+        print('Telegraph API failed, using the page:', error)
+        lines = html_lines()
+    print('First lines:', ' | '.join(lines[:3]))
     if len(lines) < 50:
         raise RuntimeError('Источник вернул слишком мало строк')
 
