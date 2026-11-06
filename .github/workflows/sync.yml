@@ -3,7 +3,8 @@ name: Update Xbox catalog website
 on:
   workflow_dispatch:
   schedule:
-    - cron: '15 7 * * *'
+    # Every 3 hours (GitHub may start scheduled runs late).
+    - cron: '17 */3 * * *'
 
 permissions:
   contents: read
